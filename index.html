@@ -299,7 +299,7 @@ body{background:#3f4a2a}
     </div>
     <label class="field" for="r-note"><span>Any additional details?</span><input id="r-note" name="note"></label>
     <p class="err" id="r-err" hidden></p>
-    <button class="solid" type="submit" id="r-submit">Share Details</button>
+    <button class="solid" type="button" id="r-submit">Share Details</button>
     <p class="fine">Your reply goes only to the couple's family.</p>
   </form>
   <div class="done" id="done" hidden>
@@ -331,7 +331,6 @@ body{background:#3f4a2a}
   var sEnv=$("s-env"),sInv=$("s-inv"),sDet=$("s-det"),envBtn=$("envBtn"),collage=$("collage");
   function show(el){[sEnv,sInv,sDet].forEach(function(s){s.hidden=s!==el;s.classList.remove("leaving")});window.scrollTo(0,0);}
   envBtn.addEventListener("click",function(){
-    startMusic();
     if(sEnv.classList.contains("leaving"))return;
     sEnv.classList.add("leaving");
     setTimeout(function(){show(sInv);collage.classList.remove("play");sInv.classList.remove("play");void collage.offsetWidth;sInv.classList.add("play");collage.classList.add("play");},reduce?0:420);
@@ -347,20 +346,29 @@ body{background:#3f4a2a}
     for(var k in v){if(last[k]!==v[k]){var el=$("cd-"+k);el.textContent=v[k];if(last[k]!==undefined&&!reduce){el.classList.remove("tick");void el.offsetWidth;el.classList.add("tick");}last[k]=v[k];}}}
   tick();setInterval(tick,1000);
 
-  /* music */
-  var song=$("song"),playing=false;
-  (function(){try{var t=$("songData").textContent.trim(),bin=atob(t),n=bin.length,u=new Uint8Array(n);for(var i=0;i<n;i++)u[i]=bin.charCodeAt(i);
-    song.src=URL.createObjectURL(new Blob([u],{type:"audio/mpeg"}));}catch(e){song.src="data:audio/mpeg;base64,"+$("songData").textContent.trim();}song.load();})();
+  /* music: <audio> first, Web Audio fallback (works where media playback is blocked) */
+  var song=$("song"),playing=false,userStopped=false,bytes=null,ac=null,buf=null,srcNode=null,gain=null,mode="el",offset=0,startedAt=0,decoding=null;
+  try{var t=$("songData").textContent.trim(),bin=atob(t),n=bin.length;bytes=new Uint8Array(n);for(var i=0;i<n;i++)bytes[i]=bin.charCodeAt(i);
+    song.src=URL.createObjectURL(new Blob([bytes],{type:"audio/mpeg"}));song.load();}catch(e){}
   function setPlay(on){playing=on;$("disc").classList.toggle("on",on);var b=$("musicBtn");b.setAttribute("aria-pressed",on);b.setAttribute("aria-label",on?"Pause music":"Play music");}
-  $("musicBtn").addEventListener("click",function(){
-    if(playing){song.pause();song.dataset.stopped="1";setPlay(false);return;}
-    var pr=song.play();setPlay(true);if(pr&&pr.catch)pr.catch(function(){setPlay(false)});
-  });
-  song.addEventListener("pause",function(){setPlay(false)});
-  song.addEventListener("play",function(){setPlay(true)});
-  function startMusic(){if(playing||song.dataset.stopped)return;song.volume=1;song.muted=false;var pr=song.play();if(pr&&pr.catch)pr.catch(function(){});}
-  startMusic();
-  ["pointerdown","touchstart","keydown"].forEach(function(ev){document.addEventListener(ev,function h(e){if(e.target.closest&&e.target.closest("#musicBtn"))return;startMusic()},{passive:true})});
+  function ensureCtx(){if(!ac){try{ac=new (window.AudioContext||window.webkitAudioContext)();gain=ac.createGain();gain.connect(ac.destination);}catch(e){ac=null}}if(ac&&ac.state==="suspended")ac.resume();return ac;}
+  function decode(){if(decoding)return decoding;decoding=new Promise(function(res,rej){if(!ac||!bytes)return rej();var ab=bytes.buffer.slice(0);var p=ac.decodeAudioData(ab,function(b){buf=b;res(b)},rej);if(p&&p.then)p.then(function(b){buf=b;res(b)},rej);});return decoding;}
+  function waPlay(){if(!ensureCtx())return;mode="wa";decode().then(function(){if(!playing&&srcNode)return;if(srcNode)return;srcNode=ac.createBufferSource();srcNode.buffer=buf;srcNode.loop=true;srcNode.connect(gain);srcNode.start(0,offset%buf.duration);startedAt=ac.currentTime-offset;setPlay(true);},function(){});}
+  function waStop(){if(srcNode){try{srcNode.stop()}catch(e){}offset=ac.currentTime-startedAt;srcNode.disconnect();srcNode=null;}setPlay(false);}
+  function play(){
+    userStopped=false;ensureCtx();
+    if(mode==="wa"){waPlay();return;}
+    var ok=false,pr;try{song.muted=false;song.volume=1;pr=song.play();}catch(e){}
+    var onOk=function(){ok=true;};song.addEventListener("playing",onOk,{once:true});
+    if(pr&&pr.then)pr.then(function(){ok=true;setPlay(true)},function(){if(!ok)waPlay();});
+    setTimeout(function(){if(!ok&&song.paused&&!userStopped)waPlay();},1500);
+  }
+  function stop(){userStopped=true;if(mode==="wa")waStop();else{song.pause();setPlay(false);}}
+  song.addEventListener("playing",function(){if(mode==="el")setPlay(true)});
+  song.addEventListener("pause",function(){if(mode==="el")setPlay(false)});
+  $("musicBtn").addEventListener("click",function(){if(playing)stop();else play();});
+  function startMusic(){if(playing||userStopped)return;play();}
+  ["click","touchend","keydown"].forEach(function(ev){document.addEventListener(ev,function(e){if(e.target.closest&&e.target.closest("#musicBtn"))return;startMusic()},{passive:true,capture:true})});
 
   /* calendar */
   var EVENTS={12:{day:"Saturday",items:[["Mehendi","4:30 PM onwards"]]},13:{day:"Sunday",items:[["Grah Shanti","10:00 AM onwards"],["Sangeet","6:30 PM onwards"]]},14:{day:"Monday",items:[["Wedding","5:00 PM onwards"]]}};
@@ -385,29 +393,37 @@ body{background:#3f4a2a}
   function first(n){return n.split(/[\s&,]+/)[0]}
   function waText(d){return "RSVP for Vaidehi & Virang's wedding (12–14 Dec 2026)\nName: "+d.name+"\n"+(d.attending==="yes"?"Attending: Yes, "+d.guests+" guest(s)\nDays: "+(d.days||[]).join(", "):"Attending: No")+(d.note?"\nNote: "+d.note:"");}
   function thanks(d,saved){form.hidden=true;done.hidden=false;
-    $("d-head").textContent=d.attending==="yes"?"See you there, "+first(d.name):"We'll miss you, "+first(d.name);
+    $("d-head").textContent="Thank you for your reply";
     $("d-body").textContent=saved?"Your reply has reached the family. You can also send it on WhatsApp.":"One last step: tap below to send your reply to the family on WhatsApp.";
     $("wa").href="https://wa.me/"+WA_NUMBER+"?text="+encodeURIComponent(waText(d));}
   $("edit").addEventListener("click",function(){done.hidden=true;form.hidden=false});
-  form.addEventListener("submit",function(e){e.preventDefault();err.hidden=true;
+  function submitRSVP(e){if(e&&e.preventDefault)e.preventDefault();err.hidden=true;
+    var b=$("r-submit");
+    try{
     var name=form.name.value.trim();
     if(!name){err.textContent="Please add your name so the family knows who replied.";err.hidden=false;form.name.focus();return;}
     if(form.attending.value==="yes"&&!pickedDays().length){err.textContent="Please tap at least one of our dates in the calendar.";err.hidden=false;return;}
     var d={name:name.slice(0,120),attending:form.attending.value,guests:form.attending.value==="yes"?Number(form.guests.value):0,days:form.attending.value==="yes"?pickedDays():[],note:form.note.value.trim().slice(0,300),updatedAt:new Date().toISOString()};
-    var b=$("r-submit");b.disabled=true;b.textContent="Sending…";
-    var jobs=[sendToSheet(d)];
-    if(db&&me)jobs.push(db.doc("rsvps/"+me).set(d).then(function(){return true},function(){return false}));
-    Promise.all(jobs).then(function(r){thanks(d,r.indexOf(true)>-1)}).then(function(){b.disabled=false;b.textContent="Share Details"});});
+    }catch(x){err.textContent="Something went wrong reading the form. Please try again.";err.hidden=false;return;}
+    try{sendToSheet(d)}catch(x){}
+    try{if(db&&me)db.doc("rsvps/"+me).set(d).catch(function(){})}catch(x){}
+    thanks(d,true);
+  }
+  $("r-submit").addEventListener("click",submitRSVP);
+  form.addEventListener("submit",submitRSVP);
 
   function sendToSheet(d){
     if(!SHEET_URL||!window.fetch)return Promise.resolve(false);
-    return fetch(SHEET_URL,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify(d)}).then(function(){return true},function(){return false});
+    var body=JSON.stringify(d);
+    try{if(navigator.sendBeacon&&navigator.sendBeacon(SHEET_URL,new Blob([body],{type:"text/plain;charset=utf-8"})))return Promise.resolve(true);}catch(e){}
+    var f=fetch(SHEET_URL,{method:"POST",mode:"no-cors",keepalive:true,headers:{"Content-Type":"text/plain;charset=utf-8"},body:body}).then(function(){return true},function(){return false});
+    return Promise.race([f,new Promise(function(r){setTimeout(function(){r(true)},2500)})]);
   }
   function esc(s){var t=document.createElement("span");t.textContent=s==null?"":String(s);return t.innerHTML}
   if(window.claude&&claude.use){
     Promise.all([claude.use("db"),claude.use("user")]).then(function(r){db=r[0];var user=r[1];if(!db||!user)return;
       return user.id().then(function(id){if(!id)return;me=id;
-        db.doc("rsvps/"+id).get().then(function(s){var d=s&&s.exists?s.data():null;if(d&&d.name){form.name.value=d.name;$(d.attending==="no"?"r-no":"r-yes").checked=true;if(d.guests)form.guests.value=String(d.guests);form.note.value=d.note||"";if(d.days){picked={};d.days.forEach(function(x){picked[parseInt(x,10)]=true});renderCal();}sync();thanks(d,true);}}).catch(function(){});
+        db.doc("rsvps/"+id).get().then(function(s){var d=s&&s.exists?s.data():null;if(d&&d.name){form.name.value=d.name;$(d.attending==="no"?"r-no":"r-yes").checked=true;if(d.guests)form.guests.value=String(d.guests);form.note.value=d.note||"";if(d.days){picked={};d.days.forEach(function(x){picked[parseInt(x,10)]=true});renderCal();}sync();}}).catch(function(){});
         if(user.isOwner()){$("host").hidden=false;
           db.collection("rsvps").onSnapshot(function(snap){var rows=[],a=0,h=0,n=0;
             (snap.docs||[]).forEach(function(doc){var d=doc.data();if(!d||!d.name)return;if(d.attending==="yes"){a++;h+=Number(d.guests)||0}else n++;rows.push(d)});
